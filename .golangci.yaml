@@ -1,0 +1,44 @@
+issues:
+   exclude-use-default: false
+   exclude:
+    - "^don't use ALL_CAPS"
+    - "^ST1003: should not use ALL_CAPS"
+    - "^G304: Potential file inclusion via variable"
+
+linters:
+  enable-all: true
+  disable:
+    - cyclop
+    - deadcode
+    - exhaustive
+    - exhaustivestruct
+    - exhaustruct
+    - forbidigo
+    - forcetypeassert
+    - funlen
+    - gochecknoglobals
+    - gocognit
+    - goconst
+    - gocyclo
+    - godox
+    - golint
+    - gomnd
+    - ifshort
+    - interfacer
+    - ireturn
+    - lll
+    - maligned
+    - nlreturn
+    - nosnakecase
+    - paralleltest
+    - revive
+    - rowserrcheck
+    - scopelint
+    - sqlclosecheck
+    - structcheck
+    - testpackage
+    - varcheck
+    - varnamelen
+    - wastedassign
+    - wrapcheck
+    - wsl
