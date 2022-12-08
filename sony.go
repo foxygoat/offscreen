@@ -173,6 +173,48 @@ func (c *RESTClient) SetPowerStatus(status bool) error {
 	return err
 }
 
+// SelectedInput returns the TVs currently selected input. Inputs are described
+// in the form of a URI.
+func (c *RESTClient) SelectedInput() (string, error) {
+	type selectedInputResponse struct {
+		Source string `json:"source"`
+		Title  string `json:"title"`
+		URI    string `json:"uri"`
+	}
+	selected, err := post[selectedInputResponse](c, "avContent", "getPlayingContentInfo", "1.0", nil)
+	if err != nil {
+		return "", err
+	}
+	return selected.URI, nil
+}
+
+// Inputs returns a map of all the inputs available, mapping each input's URI
+// to its label, and its label to its URI if it has a label. This allows inputs
+// to be looked up by either URI or label.
+func (c *RESTClient) Inputs() (map[string]string, error) {
+	type inputsStatusResponse struct {
+		URI   string `json:"uri"`
+		Label string `json:"label"`
+	}
+	inputs, err := post[[]inputsStatusResponse](c, "avContent", "getCurrentExternalInputsStatus", "1.0", nil)
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]string{}
+	for _, input := range *inputs {
+		result[input.URI] = input.Label
+		result[input.Label] = input.URI
+	}
+	return result, nil
+}
+
+// SetInput sets the current input of the TV to the given URI.
+func (c *RESTClient) SetInput(uri string) error {
+	param := map[string]string{"uri": uri}
+	_, err := post[empty](c, "avContent", "setPlayContent", "1.0", param)
+	return err
+}
+
 // post[T] executes a REST IP control command returning the result of type T or
 // an error if the command did not succeed. If no data was returned from the
 // HTTP call, the returned value will be nil. The `empty` type can be used when
