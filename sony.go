@@ -151,6 +151,28 @@ func NewRESTClient(hostname, psk string) *RESTClient {
 // e.g. `_, err := post[empty](...)`.
 type empty struct{}
 
+// PowerStatus returns the power status of the TV - i.e. whether it is on
+// or off. On is returned as "active", off as "standby". If an error occurred
+// communicating with the TV, an error is returned with an empty string status.
+func (c *RESTClient) PowerStatus() (string, error) {
+	type powerStatusResponse struct {
+		Status string `json:"status"`
+	}
+	resp, err := post[powerStatusResponse](c, "system", "getPowerStatus", "1.0", nil)
+	if err != nil {
+		return "", err
+	}
+	return resp.Status, nil
+}
+
+// SetPowerStatus sets the TV power status to on (status == true) or off
+// (status == false).
+func (c *RESTClient) SetPowerStatus(status bool) error {
+	param := map[string]bool{"status": status}
+	_, err := post[empty](c, "system", "setPowerStatus", "1.0", param)
+	return err
+}
+
 // post[T] executes a REST IP control command returning the result of type T or
 // an error if the command did not succeed. If no data was returned from the
 // HTTP call, the returned value will be nil. The `empty` type can be used when
