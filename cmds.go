@@ -25,8 +25,9 @@ type braviaAPI struct {
 
 // SonyCmd is the kong CLI struct for the `sony` command.
 type SonyCmd struct {
-	Power SonyCmdPower `cmd:""`
-	Input SonyCmdInput `cmd:""`
+	Power  SonyCmdPower  `cmd:""`
+	Input  SonyCmdInput  `cmd:""`
+	Toggle SonyCmdToggle `cmd:""`
 
 	braviaAPI
 }
@@ -40,6 +41,11 @@ type SonyCmdPower struct {
 type SonyCmdInput struct {
 	List  bool
 	Label string `arg:"" optional:"" default:"" help:"Get/set input"`
+}
+
+// SonyCmdToggle is the kong CLI struct for the `sony toggle` command.
+type SonyCmdToggle struct {
+	Input string `short:"i" help:"Specify host input, do not autodetect"`
 }
 
 // Run (sony power) gets or sets the power state of a Sony Bravia TV. If no
@@ -125,4 +131,99 @@ func (sc *SonyCmdInput) Run(cli *CLI) error {
 		}
 	}
 	return nil
+}
+
+// Run (sony toggle) toggles the state of the TV based on a set of rules. If
+// the TV is off, it will be turned on and the input labelled with the hostname
+// will be selected. If the TV is on and the label of the currently selected
+// input matches the hostname, the screen will be blanked. If the TV is on but
+// the label of the currently selected input does not match the hostname, input
+// labelled with the hostname will be selected.
+//
+// If the hostname is longer than 7 characters, it is truncated to 7 characters
+// by taking the first 6 characters and the last character of the hostname.
+// This is due to Sony Bravia labels being limited to 7 characters. The
+// hostname can be overridden with the `--input <input>` flag. That value will
+// not be truncated.
+//
+// The purpose of the (sony toggle) command is to be bound to a hot key so that
+// when pressed, it causes the screen to be set to the host on which the key
+// was pressed if the screen is not active for that machine. Otherwise it turns
+// off the screen as an alternative to locking it when locking is not desired
+// but there is no need to leave the screen on.
+func (sc *SonyCmdToggle) Run(cli *CLI) error {
+	c := NewRESTClient(cli.TV.Hostname, cli.TV.PSK)
+	labels, err := c.Inputs()
+	if err != nil {
+		return fmt.Errorf("getting labels: %w", err)
+	}
+
+	// If input is not specified, determine it from our hostname. The
+	// inputs on the TV set need to be labelled with the hostname, with
+	// a max of 7 letters. If the hostname is longer, the label must be
+	// the first 6 letters plus the last letter. e.g. "palantir" -> "palantr"
+	if sc.Input == "" {
+		if sc.Input, err = hostnameLabel(); err != nil {
+			return err
+		}
+	}
+
+	// If the input does not look like a URI, map it from labels if
+	// we can. Otherwise just use the label as the URI.
+	if !strings.HasPrefix(sc.Input, "extInput:") {
+		input := labels[sc.Input]
+		if input != "" {
+			sc.Input = input
+		}
+	}
+
+	status, err := c.PowerStatus()
+	if err != nil {
+		return fmt.Errorf("could not get power status: %w", err)
+	}
+	if status == "active" { //nolint:nestif // come on, it's not that "complex"!
+		// turn off the screen if we are the current input, otherwise
+		// switch to us.
+		input, err := c.SelectedInput()
+		if err != nil {
+			return fmt.Errorf("could not get selected input: %w", err)
+		}
+		if input == sc.Input {
+			// TODO(camh): Make this just enable the screen saver
+			// when offscreen is complete and let it take care of
+			// turning off the TV with the standad logic. That way
+			// other screens attached to the host will also be blanked.
+			if err := c.SetPowerStatus(false); err != nil {
+				return fmt.Errorf("could not turn off screen: %w", err)
+			}
+			return nil
+		}
+		if err := c.SetInput(sc.Input); err != nil {
+			return fmt.Errorf("could not select input %s: %w", sc.Input, err)
+		}
+		return nil
+	}
+
+	// Screen is off. turn it on and select our input
+	if err := c.SetPowerStatus(true); err != nil {
+		return fmt.Errorf("could not turn on screen: %w", err)
+	}
+	if err := c.SetInput(sc.Input); err != nil {
+		return fmt.Errorf("could not select input %s: %w", sc.Input, err)
+	}
+	return nil
+}
+
+// hostnameLabel converts the machines hostname into a label for TV inputs.
+// Labels are limited to seven characters. If the hostname is longer than that,
+// the first six characters and the last character are used.
+func hostnameLabel() (string, error) {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return "", fmt.Errorf("could not get hostname: %w", err)
+	}
+	if len(hostname) > 7 {
+		hostname = hostname[0:6] + hostname[len(hostname)-1:]
+	}
+	return hostname, nil
 }
