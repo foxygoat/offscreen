@@ -1,3 +1,4 @@
+//nolint:goerr113 // dynamic errors in main are OK
 package main
 
 import (
