@@ -16,12 +16,33 @@ import (
 // It will typically be wrapped so should be checked with `errors.Is()`.
 var ErrUsage = errors.New("usage error")
 
+// screenFlags is a kong CLI struct to be embedded in command structs that
+// use a [Screen] struct for communicating with an X11 server. It has an
+// [AfterApply] method that creates the [Screen] struct from the flags.
+//
+// [AfterApply]: https://github.com/alecthomas/kong#hooks-beforereset-beforeresolve-beforeapply-afterapply-and-the-bind-option
+type screenFlags struct {
+	Display      string `env:"DISPLAY" help:"X11 display to connect to"`
+	Manufacturer string `default:"SNY" help:"EDID manufacturer ID of screen to manage"`
+	ProductCode  uint16 `default:"63747" help:"EDID product code of screen to manage"`
+
+	screen *Screen
+}
+
 // braviaAPI is a kong CLI struct to be embedded in command structs that
 // talk to a Sony Bravia TV set. It contains the parameters to communicate
 // with a TV using the Bravia REST IP control protocol.
 type braviaAPI struct {
 	Hostname string `env:"OFFSCREEN_HOSTNAME" help:"Hostname of Sony Bravia TV"`
 	PSK      string `env:"OFFSCREEN_PSK" help:"Pre-shared key"`
+}
+
+// RunCmd is the kong CLI struct for the `run` command.
+type RunCmd struct {
+	braviaAPI
+	screenFlags
+
+	Input string `short:"i" help:"The TV input (label or URI) we are connected to"`
 }
 
 // SonyCmd is the kong CLI struct for the `sony` command.
@@ -47,6 +68,98 @@ type SonyCmdInput struct {
 // SonyCmdToggle is the kong CLI struct for the `sony toggle` command.
 type SonyCmdToggle struct {
 	Input string `short:"i" help:"Specify host input, do not autodetect"`
+}
+
+// AfterApply creates a new [Screen] from the flags in the [screenFlags] struct.
+func (sf *screenFlags) AfterApply() error {
+	s, err := NewScreen(sf.Display, sf.Manufacturer, sf.ProductCode)
+	if err != nil {
+		return err
+	}
+	sf.screen = s
+	return nil
+}
+
+// Run (offscreen run) runs offscreen to turn the connected TV on and off
+// in line with X screen saver events.
+func (cmd *RunCmd) Run() (err error) {
+	defer cmd.screen.Close()
+
+	// Install a panic handler to catch the errors from the ScreenWatcher
+	// function. It cannot return errors, so it panics with them instead.
+	defer func() {
+		v := recover()
+		if e, ok := v.(error); ok {
+			err = e
+		} else if v != nil {
+			panic(v)
+		}
+	}()
+
+	c := NewRESTClient(cmd.Hostname, cmd.PSK)
+	ourInput, err := getInputURI(c, cmd.Input)
+	if err != nil {
+		return fmt.Errorf("could not get input URI for %s: %w", cmd.Input, err)
+	}
+
+	watcher := ScreenWatcherFunc(func(ssOn bool) {
+		if err := ssChange(c, ourInput, ssOn); err != nil {
+			panic(err)
+		}
+	})
+	return cmd.screen.Watch(watcher)
+}
+
+// ssChange handles a screen saver change event, turning the TV on or
+// off and possibly selecting our input on the TV.
+func ssChange(c *RESTClient, ourInput string, ssOn bool) error {
+	status, err := c.PowerStatus()
+	if err != nil {
+		return fmt.Errorf("could not get power status: %w", err)
+	}
+
+	// If the TV is off and the screen saver turns on, nothing to do
+	// because the TV is already off.
+	if status == "standby" && ssOn {
+		return nil
+	}
+
+	// If the TV is off and the screen saver turns off, turn on the TV.
+	// We may later change the input, but we can't do that now because we
+	// cannot get the current input until the TV is on.
+	if status == "standby" && !ssOn {
+		if err := c.SetPowerStatus(true); err != nil {
+			return fmt.Errorf("could not set power status: %w", err)
+		}
+	}
+
+	// Get the selected input. We cannot do this before turning on the
+	// TV otherwise the Bravia REST API returns an error.
+	input, err := c.SelectedInput()
+	if err != nil {
+		return fmt.Errorf("could not get selected input: %w", err)
+	}
+
+	// If we turned on the TV and the currently selected input is not us,
+	// select our input.
+	if status == "standby" && !ssOn && input != ourInput {
+		if err := c.SetInput(ourInput); err != nil {
+			return fmt.Errorf("could not set input: %w", err)
+		}
+		return nil
+	}
+
+	// If the TV is on and the screen saver turns on, we turn off
+	// the TV but only if our input is the current input. Otherwise
+	// we leave it alone - the TV is showing the screen of another
+	// machine so we should not blank the screen.
+	if status == "active" && ssOn && input == ourInput {
+		if err := c.SetPowerStatus(false); err != nil {
+			return fmt.Errorf("could not set power status: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // Run (sony power) gets or sets the power state of a Sony Bravia TV. If no
