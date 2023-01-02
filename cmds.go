@@ -96,19 +96,10 @@ func (cmd *RunCmd) Run() error {
 func (cmd *RunCmd) loop(ch <-chan bool) error {
 	defer cmd.screen.Close()
 	c := NewRESTClient(cmd.Hostname, cmd.PSK)
-	ourLabel, err := hostnameLabel()
+	ourInput, err := getInputURI(c, cmd.Input)
 	if err != nil {
 		return fmt.Errorf("could not get input URI for %s: %w", cmd.Input, err)
 	}
-	labels, err := c.Inputs()
-	if err != nil {
-		return err
-	}
-	ourInput, ok := labels[ourLabel]
-	if !ok {
-		return fmt.Errorf("tv set does not have labelled input: %s", ourLabel)
-	}
-	cmd.Input = ourInput
 
 	for ssOn := range ch {
 		status, err := c.PowerStatus()
@@ -127,13 +118,13 @@ func (cmd *RunCmd) loop(ch <-chan bool) error {
 		if err != nil {
 			return fmt.Errorf("could not get selected input: %w", err)
 		}
-		if status == "standby" && !ssOn && input != cmd.Input {
-			if err := c.SetInput(cmd.Input); err != nil {
+		if status == "standby" && !ssOn && input != ourInput {
+			if err := c.SetInput(ourInput); err != nil {
 				return fmt.Errorf("could not set input: %w", err)
 			}
 			continue
 		}
-		if status == "active" && ssOn && input == cmd.Input {
+		if status == "active" && ssOn && input == ourInput {
 			if err := c.SetPowerStatus(false); err != nil {
 				return fmt.Errorf("could not set power status: %w", err)
 			}
@@ -247,28 +238,9 @@ func (sc *SonyCmdInput) Run(cli *CLI) error {
 // but there is no need to leave the screen on.
 func (sc *SonyCmdToggle) Run(cli *CLI) error {
 	c := NewRESTClient(cli.TV.Hostname, cli.TV.PSK)
-	labels, err := c.Inputs()
+	ourInput, err := getInputURI(c, sc.Input)
 	if err != nil {
 		return fmt.Errorf("getting labels: %w", err)
-	}
-
-	// If input is not specified, determine it from our hostname. The
-	// inputs on the TV set need to be labelled with the hostname, with
-	// a max of 7 letters. If the hostname is longer, the label must be
-	// the first 6 letters plus the last letter. e.g. "palantir" -> "palantr"
-	if sc.Input == "" {
-		if sc.Input, err = hostnameLabel(); err != nil {
-			return err
-		}
-	}
-
-	// If the input does not look like a URI, map it from labels if
-	// we can. Otherwise just use the label as the URI.
-	if !strings.HasPrefix(sc.Input, "extInput:") {
-		input := labels[sc.Input]
-		if input != "" {
-			sc.Input = input
-		}
 	}
 
 	status, err := c.PowerStatus()
@@ -282,14 +254,14 @@ func (sc *SonyCmdToggle) Run(cli *CLI) error {
 		if err != nil {
 			return fmt.Errorf("could not get selected input: %w", err)
 		}
-		if input == sc.Input {
+		if input == ourInput {
 			if err := sc.screen.Blank(); err != nil {
 				return fmt.Errorf("could not blank screen: %w", err)
 			}
 			return nil
 		}
-		if err := c.SetInput(sc.Input); err != nil {
-			return fmt.Errorf("could not select input %s: %w", sc.Input, err)
+		if err := c.SetInput(ourInput); err != nil {
+			return fmt.Errorf("could not select input %s: %w", ourInput, err)
 		}
 		return nil
 	}
@@ -298,22 +270,26 @@ func (sc *SonyCmdToggle) Run(cli *CLI) error {
 	if err := c.SetPowerStatus(true); err != nil {
 		return fmt.Errorf("could not turn on screen: %w", err)
 	}
-	if err := c.SetInput(sc.Input); err != nil {
-		return fmt.Errorf("could not select input %s: %w", sc.Input, err)
+	if err := c.SetInput(ourInput); err != nil {
+		return fmt.Errorf("could not select input %s: %w", ourInput, err)
 	}
 	return nil
 }
 
-// hostnameLabel converts the machines hostname into a label for TV inputs.
-// Labels are limited to seven characters. If the hostname is longer than that,
-// the first six characters and the last character are used.
-func hostnameLabel() (string, error) {
-	hostname, err := os.Hostname()
+func getInputURI(c *RESTClient, label string) (string, error) {
+	// If the label is already a URI, just return that.
+	if strings.HasPrefix(label, "extInput:") {
+		return label, nil
+	}
+
+	labels, err := c.Inputs()
 	if err != nil {
-		return "", fmt.Errorf("could not get hostname: %w", err)
+		return "", fmt.Errorf("could not get available inputs: %w", err)
 	}
-	if len(hostname) > 7 {
-		hostname = hostname[0:6] + hostname[len(hostname)-1:]
+	uri, ok := labels[label]
+	if !ok {
+		return "", fmt.Errorf("tv set does not have labelled input: %s", label)
 	}
-	return hostname, nil
+
+	return uri, nil
 }
