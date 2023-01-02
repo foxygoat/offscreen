@@ -69,6 +69,7 @@ type SonyCmdInput struct {
 
 // SonyCmdToggle is the kong CLI struct for the `sony toggle` command.
 type SonyCmdToggle struct {
+	screenFlags
 	Input string `short:"i" help:"Specify host input, do not autodetect"`
 }
 
@@ -282,12 +283,8 @@ func (sc *SonyCmdToggle) Run(cli *CLI) error {
 			return fmt.Errorf("could not get selected input: %w", err)
 		}
 		if input == sc.Input {
-			// TODO(camh): Make this just enable the screen saver
-			// when offscreen is complete and let it take care of
-			// turning off the TV with the standad logic. That way
-			// other screens attached to the host will also be blanked.
-			if err := c.SetPowerStatus(false); err != nil {
-				return fmt.Errorf("could not turn off screen: %w", err)
+			if err := sc.screen.Blank(); err != nil {
+				return fmt.Errorf("could not blank screen: %w", err)
 			}
 			return nil
 		}
