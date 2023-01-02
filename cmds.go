@@ -8,6 +8,10 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+
+	"github.com/anoopengineer/edidparser/edid"
+	"github.com/jezek/xgb"
+	"github.com/jezek/xgb/randr"
 )
 
 // ErrUsage is a sentinel error for when commands detect an for invalid
@@ -43,6 +47,11 @@ type RunCmd struct {
 	screenFlags
 
 	Input string `short:"i" help:"The TV input (label or URI) we are connected to"`
+}
+
+// ListCmd is the kond CLI struct for the `list` command.
+type ListCmd struct {
+	Display string `env:"DISPLAY" help:"X11 display to connect to"`
 }
 
 // SonyCmd is the kong CLI struct for the `sony` command.
@@ -161,6 +170,31 @@ func ssChange(c *RESTClient, ourInput string, ssOn bool) error {
 	}
 
 	return nil
+}
+
+// Run (list) lists the manufacturer ID and product code of all monitors
+// connected to the host. This is to be able to set the values of
+// `--manufacturer` and `--product-code` for when the defaults are not correct
+// (as the defaults are for a particular model that offscreen was built for).
+func (cmd *ListCmd) Run() error {
+	c, err := xgb.NewConnDisplay(cmd.Display)
+	if err != nil {
+		return fmt.Errorf("could not open display %s: %w", cmd.Display, err)
+	}
+	if err := randr.Init(c); err != nil {
+		return fmt.Errorf("could not initialise RANDR extension: %w", err)
+	}
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	defer tw.Flush() //nolint:errcheck // nothing to do, not a big deal
+	fmt.Fprintln(tw, "DISPLAY\tManufacturer ID\tProduct Code")
+	return RangeEDID(c, 0, func(output randr.Output, e *edid.Edid) (bool, error) {
+		oi, err := randr.GetOutputInfo(c, output, 0).Reply()
+		if err != nil {
+			return false, fmt.Errorf("could not get info for output: %w", err)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%d\n", string(oi.Name), e.ManufacturerId, e.ProductCode)
+		return true, nil
+	})
 }
 
 // Run (sony power) gets or sets the power state of a Sony Bravia TV. If no

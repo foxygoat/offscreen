@@ -17,8 +17,9 @@ offscreen turns off/on your Sony Bravia when the screen saver turns on/off
 type CLI struct {
 	Version kong.VersionFlag `short:"V" help:"Print program version"`
 
-	Run RunCmd  `cmd:"" default:"1" help:"Run offscreen"`
-	TV  SonyCmd `cmd:"" help:"query/control TV set"`
+	Run  RunCmd  `cmd:"" default:"1" help:"Run offscreen"`
+	List ListCmd `cmd:"" help:"List connected monitor IDs"`
+	TV   SonyCmd `cmd:"" help:"query/control TV set"`
 }
 
 func main() {
