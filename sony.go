@@ -1,3 +1,4 @@
+//nolint:goerr113 // dynamic errors in main are OK
 package main
 
 import (
@@ -76,8 +77,6 @@ type SonyError struct {
 // is expected to have two elements, a float64 (code) and a string (message).
 // If the size or types are not as just described, a InvalidResponseError
 // is returned instead with the body that could not be parsed.
-//
-//nolint:goerr113 // we _are_ using wrapped errors
 func NewSonyError(resp []any, body []byte) error {
 	if len(resp) != 2 {
 		return InvalidResponseError{

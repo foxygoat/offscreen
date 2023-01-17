@@ -1,3 +1,4 @@
+//nolint:goerr113 // dynamic errors in main are OK
 package main
 
 import (
@@ -7,6 +8,10 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+
+	"github.com/anoopengineer/edidparser/edid"
+	"github.com/jezek/xgb"
+	"github.com/jezek/xgb/randr"
 )
 
 // ErrUsage is a sentinel error for when commands detect an for invalid
@@ -15,12 +20,38 @@ import (
 // It will typically be wrapped so should be checked with `errors.Is()`.
 var ErrUsage = errors.New("usage error")
 
+// screenFlags is a kong CLI struct to be embedded in command structs that
+// use a [Screen] struct for communicating with an X11 server. It has an
+// [AfterApply] method that creates the [Screen] struct from the flags.
+//
+// [AfterApply]: https://github.com/alecthomas/kong#hooks-beforereset-beforeresolve-beforeapply-afterapply-and-the-bind-option
+type screenFlags struct {
+	Display      string `env:"DISPLAY" help:"X11 display to connect to"`
+	Manufacturer string `default:"SNY" help:"EDID manufacturer ID of screen to manage"`
+	ProductCode  uint16 `default:"63747" help:"EDID product code of screen to manage"`
+
+	screen *Screen
+}
+
 // braviaAPI is a kong CLI struct to be embedded in command structs that
 // talk to a Sony Bravia TV set. It contains the parameters to communicate
 // with a TV using the Bravia REST IP control protocol.
 type braviaAPI struct {
 	Hostname string `env:"OFFSCREEN_HOSTNAME" help:"Hostname of Sony Bravia TV"`
 	PSK      string `env:"OFFSCREEN_PSK" help:"Pre-shared key"`
+}
+
+// RunCmd is the kong CLI struct for the `run` command.
+type RunCmd struct {
+	braviaAPI
+	screenFlags
+
+	Input string `short:"i" help:"The TV input (label or URI) we are connected to"`
+}
+
+// ListCmd is the kond CLI struct for the `list` command.
+type ListCmd struct {
+	Display string `env:"DISPLAY" help:"X11 display to connect to"`
 }
 
 // SonyCmd is the kong CLI struct for the `sony` command.
@@ -45,7 +76,125 @@ type SonyCmdInput struct {
 
 // SonyCmdToggle is the kong CLI struct for the `sony toggle` command.
 type SonyCmdToggle struct {
+	screenFlags
 	Input string `short:"i" help:"Specify host input, do not autodetect"`
+}
+
+// AfterApply creates a new [Screen] from the flags in the [screenFlags] struct.
+func (sf *screenFlags) AfterApply() error {
+	s, err := NewScreen(sf.Display, sf.Manufacturer, sf.ProductCode)
+	if err != nil {
+		return err
+	}
+	sf.screen = s
+	return nil
+}
+
+// Run (offscreen run) runs offscreen to turn the connected TV on and off
+// in line with X screen saver events.
+func (cmd *RunCmd) Run() (err error) {
+	defer cmd.screen.Close()
+
+	// Install a panic handler to catch the errors from the ScreenWatcher
+	// function. It cannot return errors, so it panics with them instead.
+	defer func() {
+		v := recover()
+		if e, ok := v.(error); ok {
+			err = e
+		} else if v != nil {
+			panic(v)
+		}
+	}()
+
+	c := NewRESTClient(cmd.Hostname, cmd.PSK)
+	ourInput, err := getInputURI(c, cmd.Input)
+	if err != nil {
+		return fmt.Errorf("could not get input URI for %s: %w", cmd.Input, err)
+	}
+
+	watcher := ScreenWatcherFunc(func(ssOn bool) {
+		if err := ssChange(c, ourInput, ssOn); err != nil {
+			panic(err)
+		}
+	})
+	return cmd.screen.Watch(watcher)
+}
+
+// ssChange handles a screen saver change event, turning the TV on or
+// off and possibly selecting our input on the TV.
+func ssChange(c *RESTClient, ourInput string, ssOn bool) error {
+	status, err := c.PowerStatus()
+	if err != nil {
+		return fmt.Errorf("could not get power status: %w", err)
+	}
+
+	// If the TV is off and the screen saver turns on, nothing to do
+	// because the TV is already off.
+	if status == "standby" && ssOn {
+		return nil
+	}
+
+	// If the TV is off and the screen saver turns off, turn on the TV.
+	// We may later change the input, but we can't do that now because we
+	// cannot get the current input until the TV is on.
+	if status == "standby" && !ssOn {
+		if err := c.SetPowerStatus(true); err != nil {
+			return fmt.Errorf("could not set power status: %w", err)
+		}
+	}
+
+	// Get the selected input. We cannot do this before turning on the
+	// TV otherwise the Bravia REST API returns an error.
+	input, err := c.SelectedInput()
+	if err != nil {
+		return fmt.Errorf("could not get selected input: %w", err)
+	}
+
+	// If we turned on the TV and the currently selected input is not us,
+	// select our input.
+	if status == "standby" && !ssOn && input != ourInput {
+		if err := c.SetInput(ourInput); err != nil {
+			return fmt.Errorf("could not set input: %w", err)
+		}
+		return nil
+	}
+
+	// If the TV is on and the screen saver turns on, we turn off
+	// the TV but only if our input is the current input. Otherwise
+	// we leave it alone - the TV is showing the screen of another
+	// machine so we should not blank the screen.
+	if status == "active" && ssOn && input == ourInput {
+		if err := c.SetPowerStatus(false); err != nil {
+			return fmt.Errorf("could not set power status: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// Run (list) lists the manufacturer ID and product code of all monitors
+// connected to the host. This is to be able to set the values of
+// `--manufacturer` and `--product-code` for when the defaults are not correct
+// (as the defaults are for a particular model that offscreen was built for).
+func (cmd *ListCmd) Run() error {
+	c, err := xgb.NewConnDisplay(cmd.Display)
+	if err != nil {
+		return fmt.Errorf("could not open display %s: %w", cmd.Display, err)
+	}
+	if err := randr.Init(c); err != nil {
+		return fmt.Errorf("could not initialise RANDR extension: %w", err)
+	}
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	defer tw.Flush() //nolint:errcheck // nothing to do, not a big deal
+	fmt.Fprintln(tw, "DISPLAY\tManufacturer ID\tProduct Code")
+	return RangeEDID(c, 0, func(output randr.Output, e *edid.Edid) (bool, error) {
+		oi, err := randr.GetOutputInfo(c, output, 0).Reply()
+		if err != nil {
+			return false, fmt.Errorf("could not get info for output: %w", err)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%d\n", string(oi.Name), e.ManufacturerId, e.ProductCode)
+		return true, nil
+	})
 }
 
 // Run (sony power) gets or sets the power state of a Sony Bravia TV. If no
@@ -153,28 +302,9 @@ func (sc *SonyCmdInput) Run(cli *CLI) error {
 // but there is no need to leave the screen on.
 func (sc *SonyCmdToggle) Run(cli *CLI) error {
 	c := NewRESTClient(cli.TV.Hostname, cli.TV.PSK)
-	labels, err := c.Inputs()
+	ourInput, err := getInputURI(c, sc.Input)
 	if err != nil {
 		return fmt.Errorf("getting labels: %w", err)
-	}
-
-	// If input is not specified, determine it from our hostname. The
-	// inputs on the TV set need to be labelled with the hostname, with
-	// a max of 7 letters. If the hostname is longer, the label must be
-	// the first 6 letters plus the last letter. e.g. "palantir" -> "palantr"
-	if sc.Input == "" {
-		if sc.Input, err = hostnameLabel(); err != nil {
-			return err
-		}
-	}
-
-	// If the input does not look like a URI, map it from labels if
-	// we can. Otherwise just use the label as the URI.
-	if !strings.HasPrefix(sc.Input, "extInput:") {
-		input := labels[sc.Input]
-		if input != "" {
-			sc.Input = input
-		}
 	}
 
 	status, err := c.PowerStatus()
@@ -188,18 +318,14 @@ func (sc *SonyCmdToggle) Run(cli *CLI) error {
 		if err != nil {
 			return fmt.Errorf("could not get selected input: %w", err)
 		}
-		if input == sc.Input {
-			// TODO(camh): Make this just enable the screen saver
-			// when offscreen is complete and let it take care of
-			// turning off the TV with the standad logic. That way
-			// other screens attached to the host will also be blanked.
-			if err := c.SetPowerStatus(false); err != nil {
-				return fmt.Errorf("could not turn off screen: %w", err)
+		if input == ourInput {
+			if err := sc.screen.Blank(); err != nil {
+				return fmt.Errorf("could not blank screen: %w", err)
 			}
 			return nil
 		}
-		if err := c.SetInput(sc.Input); err != nil {
-			return fmt.Errorf("could not select input %s: %w", sc.Input, err)
+		if err := c.SetInput(ourInput); err != nil {
+			return fmt.Errorf("could not select input %s: %w", ourInput, err)
 		}
 		return nil
 	}
@@ -208,22 +334,26 @@ func (sc *SonyCmdToggle) Run(cli *CLI) error {
 	if err := c.SetPowerStatus(true); err != nil {
 		return fmt.Errorf("could not turn on screen: %w", err)
 	}
-	if err := c.SetInput(sc.Input); err != nil {
-		return fmt.Errorf("could not select input %s: %w", sc.Input, err)
+	if err := c.SetInput(ourInput); err != nil {
+		return fmt.Errorf("could not select input %s: %w", ourInput, err)
 	}
 	return nil
 }
 
-// hostnameLabel converts the machines hostname into a label for TV inputs.
-// Labels are limited to seven characters. If the hostname is longer than that,
-// the first six characters and the last character are used.
-func hostnameLabel() (string, error) {
-	hostname, err := os.Hostname()
+func getInputURI(c *RESTClient, label string) (string, error) {
+	// If the label is already a URI, just return that.
+	if strings.HasPrefix(label, "extInput:") {
+		return label, nil
+	}
+
+	labels, err := c.Inputs()
 	if err != nil {
-		return "", fmt.Errorf("could not get hostname: %w", err)
+		return "", fmt.Errorf("could not get available inputs: %w", err)
 	}
-	if len(hostname) > 7 {
-		hostname = hostname[0:6] + hostname[len(hostname)-1:]
+	uri, ok := labels[label]
+	if !ok {
+		return "", fmt.Errorf("tv set does not have labelled input: %s", label)
 	}
-	return hostname, nil
+
+	return uri, nil
 }
