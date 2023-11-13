@@ -6,11 +6,13 @@ O = out
 COVERAGE = 0
 VERSION ?= $(shell git describe --tags --dirty --always)
 
-all: build test lint check-coverage ## Build, test, check coverage and lint
+## Build, test, check coverage and lint
+all: build test lint check-coverage
 	@if [ -e .git/rebase-merge ]; then git --no-pager log -1 --pretty='%h %s'; fi
 	@echo '$(COLOUR_GREEN)Success$(COLOUR_NORMAL)'
 
-ci: clean check-uptodate all ## Full clean build and up-to-date checks as run on CI
+## Full clean build and up-to-date checks as run on CI
+ci: clean check-uptodate all
 
 check-uptodate: tidy
 	test -z "$$(git status --porcelain -- go.mod go.sum)" || { git status; false; }
@@ -24,13 +26,16 @@ clean:: ## Remove generated files
 GO_LDFLAGS = -X main.version=$(VERSION)
 CMDS = .
 
-build: | $(O) ## Build reflect binaries
+## Build offscreen binary
+build: | $(O)
 	go build -o $(O) -ldflags='$(GO_LDFLAGS)' $(CMDS)
 
-install: ## Build and install binaries in $GOBIN
+## Build and install binaries in $GOBIN
+install:
 	go install -ldflags='$(GO_LDFLAGS)' $(CMDS)
 
-tidy: ## Tidy go modules with "go mod tidy"
+## Tidy go modules with "go mod tidy"
+tidy:
 	go mod tidy
 
 clean::
@@ -40,13 +45,16 @@ clean::
 # --- Test ---------------------------------------------------------------------
 COVERFILE = $(O)/coverage.txt
 
-test: | $(O) ## Run non-tinygo tests and generate a coverage file
+## Run tests and generate a coverage file
+test: | $(O)
 	go test -coverprofile=$(COVERFILE) ./...
 
-check-coverage: test ## Check that test coverage meets the required level
+## Check that test coverage meets the required level
+check-coverage: test
 	@go tool cover -func=$(COVERFILE) | $(CHECK_COVERAGE) || $(FAIL_COVERAGE)
 
-cover: test ## Show test coverage in your browser
+## Show test coverage in your browser
+cover: test
 	go tool cover -html=$(COVERFILE)
 
 CHECK_COVERAGE = awk -F '[ \t%]+' '/^total:/ {print; if ($$3 < $(COVERAGE)) exit 1}'
@@ -55,13 +63,15 @@ FAIL_COVERAGE = { echo '$(COLOUR_RED)FAIL - Coverage below $(COVERAGE)%$(COLOUR_
 .PHONY: check-coverage cover test
 
 # --- Lint ---------------------------------------------------------------------
-lint: ## Lint go source code
+## Lint go source code
+lint:
 	golangci-lint run
 
 .PHONY: lint
 
 # --- Release -------------------------------------------------------------------
-release: nexttag ## Tag and release binaries for different OS on GitHub release
+## Tag and release binaries for different OS on GitHub release
+release: nexttag
 	git tag $(RELEASE_TAG)
 	git push origin $(RELEASE_TAG)
 	goreleaser release --rm-dist
@@ -85,12 +95,23 @@ COLOUR_GREEN  = $(shell tput setaf 2 2>/dev/null)
 COLOUR_WHITE  = $(shell tput setaf 7 2>/dev/null)
 
 help:
-	@awk -F ':.*## ' 'NF == 2 && $$1 ~ /^[A-Za-z0-9%_-]+$$/ { printf "$(COLOUR_WHITE)%-25s$(COLOUR_NORMAL)%s\n", $$1, $$2}' $(MAKEFILE_LIST) | sort
+	$(eval export HELP_AWK)
+	@awk "$${HELP_AWK}" $(MAKEFILE_LIST) | sort | column -s "$$(printf \\t)" -t
 
 $(O):
 	@mkdir -p $@
 
 .PHONY: help
+
+# Awk script to extract and print target descriptions for `make help`.
+define HELP_AWK
+/^## / { desc = desc substr($$0, 3) }
+/^[A-Za-z0-9%_-]+:/ && desc {
+	sub(/:$$/, "", $$1)
+	printf "$(COLOUR_WHITE)%s$(COLOUR_NORMAL)\t%s\n", $$1, desc
+	desc = ""
+}
+endef
 
 define nl
 
