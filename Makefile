@@ -74,7 +74,7 @@ lint:
 release: nexttag
 	git tag $(RELEASE_TAG)
 	git push origin $(RELEASE_TAG)
-	goreleaser release --rm-dist
+	goreleaser release --clean
 
 nexttag:
 	$(if $(RELEASE_TAG),,$(eval RELEASE_TAG := $(shell $(NEXTTAG_CMD))))
