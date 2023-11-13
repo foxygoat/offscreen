@@ -233,7 +233,7 @@ func post[T any](c *RESTClient, service, method, version string, params any) (*T
 	if err != nil {
 		return nil, fmt.Errorf("new request: %w", err)
 	}
-	resp, err := c.do(brq)
+	resp, err := c.do(brq) //nolint:bodyclose // false positive
 	if err != nil {
 		return nil, fmt.Errorf("http: %w", err)
 	}

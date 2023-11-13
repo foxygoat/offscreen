@@ -10,6 +10,7 @@ linters:
   disable:
     - cyclop
     - deadcode
+    - depguard
     - exhaustive
     - exhaustivestruct
     - exhaustruct
@@ -37,6 +38,7 @@ linters:
     - scopelint
     - sqlclosecheck
     - structcheck
+    - tagalign
     - testpackage
     - varcheck
     - varnamelen
