@@ -95,27 +95,14 @@ func (sf *screenFlags) AfterApply() error {
 func (cmd *RunCmd) Run() (err error) {
 	defer cmd.screen.Close()
 
-	// Install a panic handler to catch the errors from the ScreenWatcher
-	// function. It cannot return errors, so it panics with them instead.
-	defer func() {
-		v := recover()
-		if e, ok := v.(error); ok {
-			err = e
-		} else if v != nil {
-			panic(v)
-		}
-	}()
-
 	c := NewRESTClient(cmd.Hostname, cmd.PSK)
 	ourInput, err := getInputURI(c, cmd.Input)
 	if err != nil {
 		return fmt.Errorf("could not get input URI for %s: %w", cmd.Input, err)
 	}
 
-	watcher := ScreenWatcherFunc(func(ssOn bool) {
-		if err := ssChange(c, ourInput, ssOn); err != nil {
-			panic(err)
-		}
+	watcher := ScreenWatcherFunc(func(ssOn bool) error {
+		return ssChange(c, ourInput, ssOn)
 	})
 	return cmd.screen.Watch(watcher)
 }

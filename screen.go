@@ -35,15 +35,15 @@ type Screen struct {
 // state of the screen saver changes - i.e. when the screen saver turns on or
 // off. It is not called if the TV/monitor is not plugged in.
 type ScreenWatcher interface {
-	SSChange(ssOn bool)
+	SSChange(ssOn bool) error
 }
 
 // ScreenWatcherFunc is a function adaptor for the ScreenWatcher interface.
-type ScreenWatcherFunc func(ssOn bool)
+type ScreenWatcherFunc func(ssOn bool) error
 
 // SSChange calls the function adaptor with the value of ssOn.
-func (swf ScreenWatcherFunc) SSChange(ssOn bool) {
-	swf(ssOn)
+func (swf ScreenWatcherFunc) SSChange(ssOn bool) error {
+	return swf(ssOn)
 }
 
 // NewScreen returns a new Screen with a connection to the X server for the
@@ -147,7 +147,9 @@ func (s *Screen) Watch(watcher ScreenWatcher) error {
 			wasOn := s.ssOn.Swap(isOn)
 			// Send the screensaver state if it changes and the monitor is present
 			if isOn != wasOn && s.IsPresent() {
-				watcher.SSChange(isOn)
+				if err := watcher.SSChange(isOn); err != nil {
+					return err
+				}
 			}
 		case randr.NotifyEvent:
 			// It is too hard to determine from the randr event whether it is for
@@ -160,7 +162,9 @@ func (s *Screen) Watch(watcher ScreenWatcher) error {
 			wasPresent := s.present.Swap(present)
 			// If the monitor has just appeared, send the screensaver state
 			if present && !wasPresent {
-				watcher.SSChange(s.IsScreenSaverOn())
+				if err := watcher.SSChange(s.IsScreenSaverOn()); err != nil {
+					return err
+				}
 			}
 		}
 	}
