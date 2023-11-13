@@ -14,6 +14,15 @@ import (
 	"github.com/jezek/xgb/randr"
 )
 
+var (
+	// buildtimeHost and buildtimePSK are the values of $OFFSCREEN_HOSTNAME
+	// and $OFFSCREEN_PSK at the time offscreen was built. It allows
+	// customising the default with local parameters which do not show up
+	// in the Kong usage message because they may be sensitive.
+	buildtimeHost string
+	buildtimePSK  string
+)
+
 // ErrUsage is a sentinel error for when commands detect an for invalid
 // combinations of flags or args. Usually kong handles all this, but sometimes
 // you cannot express an invalid combination of args/flags in the kong tags.
@@ -39,6 +48,26 @@ type screenFlags struct {
 type braviaAPI struct {
 	Hostname string `env:"OFFSCREEN_HOSTNAME" help:"Hostname of Sony Bravia TV"`
 	PSK      string `env:"OFFSCREEN_PSK" help:"Pre-shared key"`
+}
+
+// BeforeResolve runs before environment variable defaults are applied to
+// the kong structs, allowing us to set build-time values for the Bravia
+// host and PSK before looking in the OFFSCREEN_* env vars.
+// BeforeResolve implements the kong.BeforeResolve interface.
+func (b *braviaAPI) BeforeResolve() error { //nolint:unparam // false positive
+	// Ensure we do not override values set from the environment
+	// at run time (OFFSCREEN_HOSTNAME and OFFSCREEN_PSK).
+	// The kong docs says env settings are not applied until resolve time,
+	// but the code does not actually use a resolver for env values and
+	// instead sets them during the Reset() phase. b.Hostname and/or
+	// b.PSK will be set during Reset() if set from an env var.
+	if b.Hostname == "" {
+		b.Hostname = buildtimeHost
+	}
+	if b.PSK == "" {
+		b.PSK = buildtimePSK
+	}
+	return nil
 }
 
 // RunCmd is the kong CLI struct for the `run` command.

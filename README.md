@@ -20,3 +20,30 @@ is actually connected to the computer so that we do not try to turn it on and
 off if it is not actually plugged into the machine. This is handy for laptops
 which may get unplugged but remain on wifi, so are still able to control the TV
 when we may not want it to.
+
+## Building
+
+You can build offscreen with:
+
+    make build
+
+and the binary will be written to `out/offscreen` in the root of the repository.
+
+⚠️  Caution ⚠️
+
+If the environment variables `OFFSCREEN_HOSTNAME` or `OFFSCREEN_PSK` are set in
+the environment when you build the binary with `make build` or `make install`,
+the values from those environment variables will be built into the binary as the
+default for the `--hostname` and `--psk` flags. The pre-shared key (PSK) is
+sensitive so be aware if you are going to distribute the binary.
+
+This is done to make it easier to use the binary across multiple machines
+without requiring the PSK or hostname environment variables set up in your shell
+rc file, or requiring the argument be supplied when running. But this could leak
+your PSK if you share such a binary.
+
+If you take the binary from the [offscreen GitHub releases page] or build it
+with `go install foxygo.at/offscreen@latest`, there will be no default hostname
+or PSK embedded in the binary.
+
+[offscreen GitHub releases page]: https://github.com/foxygoat/offscreen/releases

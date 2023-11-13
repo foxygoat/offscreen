@@ -23,7 +23,9 @@ clean:: ## Remove generated files
 .PHONY: all check-uptodate ci clean
 
 # --- Build --------------------------------------------------------------------
-GO_LDFLAGS = -X main.version=$(VERSION)
+GO_LDFLAGS = -X main.version=$(VERSION) \
+	     -X main.buildtimeHost=$(OFFSCREEN_HOSTNAME) \
+	     -X main.buildtimePSK=$(OFFSCREEN_PSK)
 CMDS = .
 
 ## Build offscreen binary
